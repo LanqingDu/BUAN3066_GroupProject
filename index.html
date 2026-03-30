@@ -135,88 +135,56 @@
 
 <script>
     // ═══════════════════════════════════════════════════════════════
-    //   STEP 1 — Fill in these three values, then save & push to GitHub
+    //  Paste your Google Apps Script Web App URL here (only change needed)
     // ═══════════════════════════════════════════════════════════════
-    const GH_OWNER = 'LanqingDu';     
-    const GH_REPO  = 'BUAN3066_GroupProject';  
-    const GH_TOKEN = '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';  
+    const SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbx3ZHWp89WHNVBl05DLae8uvX0TO_r6ucSu9_o58yiHyzUeyAbBftu8-tBUz67QdKbjgw/exec';
     // ═══════════════════════════════════════════════════════════════
-    //   Students need to do nothing — the above handles everything.
-    // ═══════════════════════════════════════════════════════════════
-
-    const GH_PATH = 'data.json';
-    const API_URL = `https://api.github.com/repos/${GH_OWNER}/${GH_REPO}/contents/${GH_PATH}`;
-    const HEADERS = {
-        'Authorization': `Bearer ${GH_TOKEN}`,
-        'Accept': 'application/vnd.github+json',
-        'X-GitHub-Api-Version': '2022-11-28',
-        'Content-Type': 'application/json'
-    };
 
     const restrictionTime = new Date('2026-04-01T14:00:00');
     const warningMessage  = "Students will only be permitted to join another group as a member after April 1 at 2:00 PM.";
 
     let projects = [];
-    let fileSHA  = null;
 
     // ── Startup ───────────────────────────────────────────────────
     window.addEventListener('DOMContentLoaded', async () => {
         await loadData();
-        setInterval(loadData, 30000); // auto-refresh every 30s
+        setInterval(loadData, 30000);
     });
 
-    // ── Read from GitHub ──────────────────────────────────────────
+    // ── Load from Google Sheet ────────────────────────────────────
     async function loadData() {
         setStatus('⟳ Syncing…', 'syncing');
         try {
-            const res = await fetch(API_URL, { headers: HEADERS });
-
-            if (res.status === 404) {
-                // First ever load — data.json doesn't exist yet, create it
-                projects = [];
-                await writeData('Initialize data file');
-                return;
-            }
-            if (!res.ok) throw new Error(`GitHub returned ${res.status}`);
-
+            const res  = await fetch(`${SCRIPT_URL}?action=load`);
             const json = await res.json();
-            fileSHA  = json.sha;
-            projects = JSON.parse(atob(json.content.replace(/\n/g, '')));
+            if (!json.ok) throw new Error(json.error);
+            projects = json.projects;
             render();
             setStatus(`✓ Live · synced ${new Date().toLocaleTimeString()}`, 'success');
-        } catch (e) {
+        } catch(e) {
             setStatus(`✗ ${e.message}`, 'error');
         } finally {
             hideLoading();
         }
     }
 
-    // ── Write to GitHub ───────────────────────────────────────────
-    async function writeData(msg) {
-        const content = btoa(unescape(encodeURIComponent(JSON.stringify(projects, null, 2))));
-        const body    = { message: msg, content, ...(fileSHA ? { sha: fileSHA } : {}) };
-
+    // ── Save to Google Sheet ──────────────────────────────────────
+    async function saveData() {
         setStatus('⟳ Saving…', 'syncing');
-        setPublishBusy(true);
+        setBusy(true);
         try {
-            const res = await fetch(API_URL, { method: 'PUT', headers: HEADERS, body: JSON.stringify(body) });
-
-            if (res.status === 409) {
-                // Another user saved at the same time — reload then re-render
-                setStatus('⟳ Conflict — reloading…', 'syncing');
-                await loadData();
-                return;
-            }
-            if (!res.ok) throw new Error(`GitHub returned ${res.status}`);
-
+            const res  = await fetch(SCRIPT_URL, {
+                method: 'POST',
+                body: JSON.stringify({ action: 'save', projects })
+            });
             const json = await res.json();
-            fileSHA = json.content.sha;
+            if (!json.ok) throw new Error(json.error);
             render();
             setStatus(`✓ Saved · ${new Date().toLocaleTimeString()}`, 'success');
-        } catch (e) {
+        } catch(e) {
             setStatus(`✗ Save failed: ${e.message}`, 'error');
         } finally {
-            setPublishBusy(false);
+            setBusy(false);
         }
     }
 
@@ -235,10 +203,10 @@
         if (!leader || !email || !name) { alert('All fields are required.'); return; }
 
         showLoading('Publishing…');
-        await loadData();  // fetch latest SHA before writing
+        await loadData();
         projects.push({ id: Date.now(), leader, leaderEmail: email, projectName: name, description: desc, members: [] });
         document.querySelectorAll('input, textarea').forEach(el => el.value = '');
-        await writeData(`Add project: ${name}`);
+        await saveData();
         hideLoading();
     }
 
@@ -254,7 +222,7 @@
         await loadData();
         if (projects[index].members.length >= 4) { alert('This group is already full.'); hideLoading(); return; }
         projects[index].members.push({ name, email });
-        await writeData(`Join: ${projects[index].projectName}`);
+        await saveData();
         hideLoading();
     }
 
@@ -266,9 +234,9 @@
         showLoading('Withdrawing…');
         await loadData();
         const mi = projects[pIdx].members.findIndex(m => m.email === verify);
-        if (mi === -1) { alert('Member not found — the page has been updated. Please try again.'); hideLoading(); return; }
+        if (mi === -1) { alert('Member not found — please try again.'); hideLoading(); return; }
         projects[pIdx].members.splice(mi, 1);
-        await writeData(`Leave: ${projects[pIdx].projectName}`);
+        await saveData();
         hideLoading();
     }
 
@@ -282,9 +250,8 @@
         await loadData();
         const pi = projects.findIndex(p => p.leaderEmail === verify);
         if (pi === -1) { alert('Project not found.'); hideLoading(); return; }
-        const name = projects[pi].projectName;
         projects.splice(pi, 1);
-        await writeData(`Withdraw: ${name}`);
+        await saveData();
         hideLoading();
     }
 
@@ -337,7 +304,7 @@
         el.textContent = msg;
         el.className   = type;
     }
-    function setPublishBusy(busy) {
+    function setBusy(busy) {
         document.getElementById('publish-btn').disabled = busy;
     }
     function showLoading(msg = 'Loading…') {
